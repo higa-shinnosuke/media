@@ -54,6 +54,8 @@ import androidx.media3.exoplayer.ima.ImaServerSideAdInsertionMediaSource;
 import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer.DecoderInitializationException;
 import androidx.media3.exoplayer.mediacodec.MediaCodecUtil.DecoderQueryException;
 import androidx.media3.exoplayer.offline.DownloadRequest;
+import androidx.media3.exoplayer.source.ClippingMediaSource;
+import androidx.media3.exoplayer.source.ConcatenatingMediaSource2;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.exoplayer.source.ads.AdsLoader;
@@ -258,6 +260,7 @@ public class PlayerActivity extends AppCompatActivity
   /**
    * @return Whether initialization was successful.
    */
+  @OptIn(markerClass = UnstableApi.class)
   protected boolean initializePlayer() {
     Intent intent = getIntent();
     if (player == null) {
@@ -274,6 +277,8 @@ public class PlayerActivity extends AppCompatActivity
       setRenderersFactory(
           playerBuilder, intent.getBooleanExtra(IntentUtil.PREFER_EXTENSION_DECODERS_EXTRA, false));
       player = playerBuilder.build();
+      player.setPauseAtEndOfMediaItems(true);
+      player.setRepeatMode(Player.REPEAT_MODE_ALL);
       player.setTrackSelectionParameters(trackSelectionParameters);
       player.addListener(new PlayerEventListener());
       player.addAnalyticsListener(new EventLogger());
@@ -288,7 +293,8 @@ public class PlayerActivity extends AppCompatActivity
     if (haveStartPosition) {
       player.seekTo(startItemIndex, startPosition);
     }
-    player.setMediaItems(mediaItems, /* resetPosition= */ !haveStartPosition);
+    player.setMediaSources(createMediaSourcesWithShortLastPeriod(mediaItems),
+        /* resetPosition= */ !haveStartPosition);
     player.prepare();
     String repeatModeExtra = intent.getStringExtra(IntentUtil.REPEAT_MODE_EXTRA);
     if (repeatModeExtra != null) {
@@ -296,6 +302,39 @@ public class PlayerActivity extends AppCompatActivity
     }
     updateButtonVisibility();
     return true;
+  }
+
+  @OptIn(markerClass = UnstableApi.class)
+  private List<MediaSource> createMediaSourcesWithShortLastPeriod(List<MediaItem> mediaItems) {
+    MediaSource.Factory mediaSourceFactory = new DefaultMediaSourceFactory(this)
+        .setDataSourceFactory(dataSourceFactory);
+    int loopCount = 3;
+    long loopDurationMs = 5_000;
+    long lastDurationMs = 100;
+
+    List<MediaSource> mediaSources = new ArrayList<>();
+
+    for (MediaItem mediaItem : mediaItems) {
+      MediaSource mediaSource = mediaSourceFactory.createMediaSource(mediaItem);
+      ConcatenatingMediaSource2.Builder concatBuilder = new ConcatenatingMediaSource2.Builder();
+
+      for (int i = 0; i < loopCount; i++) {
+        ClippingMediaSource.Builder clippingBuilder = new ClippingMediaSource.Builder(mediaSource);
+        ClippingMediaSource loopClip = clippingBuilder
+            .setEndPositionMs(loopDurationMs)
+            .build();
+        concatBuilder.add(loopClip);
+      }
+
+      ClippingMediaSource.Builder clippingBuilder = new ClippingMediaSource.Builder(mediaSource);
+      ClippingMediaSource lastClip = clippingBuilder
+          .setEndPositionMs(lastDurationMs)
+          .build();
+      concatBuilder.add(lastClip);
+
+      mediaSources.add(concatBuilder.build());
+    }
+    return mediaSources;
   }
 
   @OptIn(markerClass = UnstableApi.class) // DRM configuration
